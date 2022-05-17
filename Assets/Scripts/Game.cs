@@ -1,22 +1,47 @@
+using System;
+using System.ComponentModel;
+using System.Linq;
 using System.Net;
+using System.Threading;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 public class Game : MonoBehaviour
 {
     private const int PORT_LOCAL = 13000;
     private const int PORT_REMOTE = 13200;
-    public const int TICK_COUNT = 255;
     [SerializeField] private InputController _input;
     [SerializeField] private Plane _plane;
+    [SerializeField] private FileCreator _fileCreator; 
     private Client _client;
-    public static int MyPlayerId;
-    private static int _tick;
-    public static bool Stoped;
-    private void Start()
+    public static int MyPlayerId { get; private set; }
+    public static long LocalTickFromServer { get; private set; }
+    public static long TickServer { get; private set; }
+    public static long TickLocal { get; private set; }
+    public static bool Stoped { get; private set; }
+    private bool _isFirstTick;
+    private byte[] _receiveBuffer;
+    private Player _myPlayer;
+    private void Start() 
     {
         Application.runInBackground = true;
         _input.OnConnect += Connect;
-        _tick = 1;
+        TickServer = 1;
+    }
+    private void Update() 
+    {
+        if(_myPlayer == null) return;
+        var preLastPosOnServer = _myPlayer.PreLastServerPercentVector; 
+        var lastPosOnServer = _myPlayer.ServerPercentVector;
+        var lastPosOnClient = _myPlayer.LocalPercentPosition;
+        _fileCreator.AddString($"{Time.time} {TickLocal} {TickServer-1} {TickServer} " +
+                               $"{preLastPosOnServer.x} {preLastPosOnServer.y} {lastPosOnServer.x} {lastPosOnServer.y} " +
+                               $"{lastPosOnClient.x} {lastPosOnClient.y} {_myPlayer.Interpolation}\n");
+    }
+    private void UpdateInput(System.Object obj)
+    {
+        if(Stoped)return;
+        _input.InputUpdate();
     }
     private void Connect(string ip)
     {
@@ -24,46 +49,67 @@ public class Game : MonoBehaviour
         if(_client is { Registred: true }) return;
         if (ip == "") ip = "91.239.19.112";
         _client = new Client(PORT_LOCAL,PORT_REMOTE, ip);
+        _client.OnRegister += SetId;
         _client.OnReceive += SetDirections;
         _client.Work();
         _input.OnInput += SetInput;
         _input.OnStop += StopClient;
         _input.OnChangeTick += ChangeTickFromInput;
+        _plane.OnSetMyPlayer += SetMyPlayer;
+        
+        TimerCallback timerCallback = UpdateInput;
+        Timer inputSender = new Timer(timerCallback, null, 0, 100);
     }
-    private void SetDirections(int[] buffer)
+    private void SetMyPlayer(Player myPlayer)
+    {
+        _myPlayer = myPlayer;
+    }
+    private void SetDirections(byte[] buffer)
     {
         if (Stoped) return;
-        SetTick(buffer[0]);
-        _plane.SetDictDirections(buffer);
+        SetTick(buffer);
+        _receiveBuffer = buffer.Skip(16).ToArray();
+        _plane.SetDictDirections(_receiveBuffer);
     }
     private void SetInput(int x,int y, int boost)
     {
-        if (Stoped) return;
-        _client.SetInput(x,y,boost);
-        _plane.SetInput(x,y,boost);
+        if (Stoped || MyPlayerId == 0 ) return;
+        if (_isFirstTick) SetLocalTick();
+        if (LocalTickFromServer == 0)
+            LocalTickFromServer = TickServer;
+        _client.SendInput(TickLocal, x, y, boost);
+        _plane.SetInput(x,y,boost); 
     }
-    private void SetTick(int tick)
+    private void SetLocalTick()
     {
-        _tick = tick;
+        TickLocal++;
+        _plane.ChangeTick();
     }
-    private void ChangeTickFromInput(int tick)
+    private void SetTick(byte[] buffer)
+    {
+        var newBuffer = buffer.Take(8).ToArray();
+        LocalTickFromServer = BitConverter.ToInt64(newBuffer, 0);
+        newBuffer = buffer.Skip(8).Take(8).ToArray();
+        TickServer = BitConverter.ToInt64(newBuffer, 0);
+        if (!_isFirstTick)
+        {
+            _isFirstTick = true;
+            TickLocal = TickServer;
+            LocalTickFromServer = TickServer;
+        } 
+    }
+    private void ChangeTickFromInput(long tick)
     {
         if (!Stoped) return;
         _plane.MovePlayerShadows(tick);
     }
     private void StopClient()
-    {
+    { 
         Stoped = true;
+        _isFirstTick = false;
     }
-    public static int GetTick()
+    private void SetId(byte id)
     {
-        return _tick;
+        MyPlayerId = id;
     }
-    public static int GetPrevTick(int tick = 0)
-    {
-        if (tick == 0) tick = _tick;
-        if (tick == 1)
-            return TICK_COUNT;
-        return tick-1;
-    } 
 }

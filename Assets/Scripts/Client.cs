@@ -10,10 +10,11 @@ public class Client
 {
     private static UdpClient _clientUdpSender;
     private static UdpClient _clientUdpReceiver;
-    public Action<int[]> OnReceive;
+    public Action<byte[]> OnReceive;
+    public Action<byte> OnRegister;
 
-    private delegate void ReceiveHandler(int[] buffer);
-    private int[] _receiveBuffer;
+    private delegate void ReceiveHandler(byte[] buffer);
+    private readonly Dictionary<long,byte[]> _sendBufferList;
     public bool Registred { get; private set; } 
     private int _portLocal;
     private int _portRemote;
@@ -24,7 +25,7 @@ public class Client
         _ip = IPAddress.Parse(connectIp);
         _clientUdpSender = new UdpClient(portRemote,_ip.AddressFamily);
         _clientUdpReceiver = new UdpClient(portLocal);
-        _receiveBuffer = new int[300];
+        _sendBufferList = new Dictionary<long, byte[]>();
         _portRemote = portRemote;
         _clientListener = new Thread(Reader);
         _portLocal = portLocal;
@@ -34,11 +35,30 @@ public class Client
     {
         _clientListener.Start();
     }
-    public void SetInput( int x, int y, int boost)
+    public void SendInput( long localTick, int x, int y, int boost)
     {
         if (!Registred) return;
-        byte[] buffer = { (byte)Game.MyPlayerId, (byte)boost,  (byte)(x + 1), (byte)(y + 1) };
-        _clientUdpSender.Send(buffer, buffer.Length);
+        byte[] bufferLocalTick = BitConverter.GetBytes(localTick);
+        byte[] buffer =  { (byte)boost, (byte)(x + 1), (byte)(y + 1) };
+        byte[] newBuffer = new byte[bufferLocalTick.Length + buffer.Length];
+        bufferLocalTick.CopyTo(newBuffer, 0); 
+        buffer.CopyTo(newBuffer, bufferLocalTick.Length); 
+        _sendBufferList[localTick] = newBuffer;
+        //Debug.Log("x" + x + "y" + y);  
+        if (localTick <= Game.LocalTickFromServer) return;
+        for (long i = Game.LocalTickFromServer+1; i <= localTick; i++)
+        {
+            try
+            {
+                _clientUdpSender.Send(_sendBufferList[i], _sendBufferList[i].Length);
+            }
+            catch (Exception e)
+            {
+                Debug.Log(Game.LocalTickFromServer+1 - localTick);
+                throw;
+            }
+        }
+
     }
     private void Reader()
     { 
@@ -65,15 +85,16 @@ public class Client
         finally
         {
             Debug.Log("Close");
-            _clientUdpReceiver.Close();
+            _clientUdpReceiver.Close(); 
         }
     }
     private IPEndPoint Register(IPEndPoint remoteIp)
     {
         Debug.Log("Send " + _clientUdpSender.Send(new byte []{0}, 1));
         var byteBuffer = _clientUdpReceiver.Receive(ref remoteIp);
-        if (byteBuffer[0] == 0) return remoteIp;
-        Game.MyPlayerId = byteBuffer[0];
+        if (byteBuffer[0] == 0) return remoteIp; 
+        OnRegister?.Invoke(byteBuffer[0]);
+        Debug.Log("MyPlayerId " + Game.MyPlayerId );
         Registred = true;
         _portLocal += byteBuffer[0];
         _portRemote += byteBuffer[0];
@@ -86,13 +107,7 @@ public class Client
     private void ReadDirections(ReceiveHandler handler,IPEndPoint remoteIp)
     {
         var byteBuffer = _clientUdpReceiver.Receive(ref remoteIp);
-        if(byteBuffer[0] == 0) return;
-        _receiveBuffer = new int[byteBuffer.Length];
-        for (int i = 0; i < byteBuffer.Length; i++)
-        {
-            _receiveBuffer[i] = byteBuffer[i];
-        }
-        handler.BeginInvoke(_receiveBuffer, null, null);
+        handler.BeginInvoke(byteBuffer, null, null);
     }
     ~Client()
     {

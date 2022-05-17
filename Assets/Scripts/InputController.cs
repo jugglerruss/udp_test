@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Threading;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -7,45 +8,48 @@ public class InputController : MonoBehaviour
 {
     [SerializeField] private Text _textIp;
     [SerializeField] private Text _textTick;
-    [SerializeField] private Slider _tickSlider;
     public Action<int,int,int> OnInput;
     public Action<string> OnConnect;
-    public Action<int> OnChangeTick;
+    public Action<long> OnChangeTick;
     public Action OnStop;
     private int _x, _y, _boost;
-    private bool _boostedFlag;
-    private void Start()
+    private int _boostedCounter;
+    private int _boostStopCounter;
+    private bool _boostStop;
+    private void Update()
     {
-        _x = 0;
-        _y = 0;
-    }
-    private void OnDestroy()
-    {
-        StopCoroutine(BoostReset());
-    }
-    void FixedUpdate()
-    {
-        SetDirection();
         if(!Game.Stoped)
-            ChangeTick(Game.GetTick());
-    }
-    private void SetDirection()
-    {
-        if(!_boostedFlag && Input.GetKey(KeyCode.LeftShift))
+            ChangeTick(Game.TickServer);
+        if(Input.GetKey(KeyCode.LeftShift))
             _boost = 1;
         _x = (int)Math.Round(Input.GetAxis("Horizontal"));
         _y = (int)Math.Round(Input.GetAxis("Vertical"));
-        OnInput?.Invoke(_x,_y,_boost);
-        if (_boost == 1 && !_boostedFlag)
-            StartCoroutine(BoostReset());
     }
-    private IEnumerator BoostReset()
+    public void InputUpdate()
     {
-        _boostedFlag = true;
-        yield return new WaitForSeconds(0.5f);
-        _boost = 0;
-        yield return new WaitForSeconds(1f);
-        _boostedFlag = false;
+        OnInput?.Invoke(_x,_y,_boost);
+        if (_boostStop)
+        {
+            _boostStopCounter++;
+            if (_boostStopCounter != 10)
+                return;
+            _boostStopCounter = 0;
+            _boostStop = false;
+            return;
+        }
+        if (_boost == 1)
+        {
+            _boostedCounter++;
+            if (_boostedCounter != 5)
+                return;
+            _boostedCounter = 0;
+            _boost = 0; 
+            _boostStop = true;
+        }
+        else
+        {
+            _boostedCounter = 0;
+        }
     }
     public void Connect()
     {
@@ -55,14 +59,22 @@ public class InputController : MonoBehaviour
     {
         OnStop?.Invoke();
     }
-    public void OnChangeSlider(float tick)
+    public void PrevTick()
     {
-        _textTick.text = tick.ToString();
-        OnChangeTick?.Invoke((int)tick);
+        long tick = Int64.Parse(_textTick.text);
+        tick--;
+        ChangeTick(tick);
+        OnChangeTick?.Invoke(tick); 
     }
-    private void ChangeTick(int tick)
+    public void NextTick()
+    {
+        long tick = Int64.Parse(_textTick.text);
+        tick++;
+        ChangeTick(tick);
+        OnChangeTick?.Invoke(tick); 
+    }
+    private void ChangeTick(long tick)
     {
         _textTick.text = tick.ToString();
-        _tickSlider.value = tick;
     }
 }
