@@ -27,13 +27,14 @@ public class Game : MonoBehaviour
         Application.runInBackground = true;
         _input.OnConnect += Connect;
         TickServer = 1;
+        
     }
     private void Update() 
     {
         if(_myPlayer == null) return;
-        var preLastPosOnServer = _myPlayer.PreLastServerPercentVector; 
-        var lastPosOnServer = _myPlayer.ServerPercentVector;
-        var lastPosOnClient = _myPlayer.LocalPercentPosition;
+        var preLastPosOnServer = _myPlayer.PreLastServerPosition; 
+        var lastPosOnServer = _myPlayer.ServerPosition;
+        var lastPosOnClient = _myPlayer.LocalPosition;
         _fileCreator.AddString($"{Time.time} {TickLocal} {TickServer-1} {TickServer} " +
                                $"{preLastPosOnServer.x} {preLastPosOnServer.y} {lastPosOnServer.x} {lastPosOnServer.y} " +
                                $"{lastPosOnClient.x} {lastPosOnClient.y} {_myPlayer.Interpolation}\n");
@@ -46,7 +47,7 @@ public class Game : MonoBehaviour
     private void Connect(string ip)
     {
         Stoped = false;
-        if(_client is { Registred: true }) return;
+        if(_client is { Registered: true }) return;
         if (ip == "") ip = "91.239.19.112";
         _client = new Client(PORT_LOCAL,PORT_REMOTE, ip);
         _client.OnRegister += SetId;
@@ -75,8 +76,6 @@ public class Game : MonoBehaviour
     {
         if (Stoped || MyPlayerId == 0 ) return;
         if (_isFirstTick) SetLocalTick();
-        if (LocalTickFromServer == 0)
-            LocalTickFromServer = TickServer;
         _client.SendInput(TickLocal, x, y, boost);
         _plane.SetInput(x,y,boost); 
     }
@@ -88,15 +87,14 @@ public class Game : MonoBehaviour
     private void SetTick(byte[] buffer)
     {
         var newBuffer = buffer.Take(8).ToArray();
-        LocalTickFromServer = BitConverter.ToInt64(newBuffer, 0);
+        LocalTickFromServer = BitConverter.ToInt64(newBuffer, 0); 
         newBuffer = buffer.Skip(8).Take(8).ToArray();
         TickServer = BitConverter.ToInt64(newBuffer, 0);
-        if (!_isFirstTick)
-        {
-            _isFirstTick = true;
-            TickLocal = TickServer;
-            LocalTickFromServer = TickServer;
-        } 
+     //   Debug.Log("Game.LocalTickFromServer" + Game.LocalTickFromServer + " TickLocal " + TickLocal + " TickServer " + TickServer);  
+        if (_isFirstTick)
+            return;
+        _isFirstTick = true;
+        TickLocal = TickServer;
     }
     private void ChangeTickFromInput(long tick)
     {

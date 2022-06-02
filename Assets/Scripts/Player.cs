@@ -6,117 +6,101 @@ using UnityEngine.UI;
 [RequireComponent(typeof(SpriteRenderer), typeof(RectTransform))]
 public class Player : MonoBehaviour
 {
-    private const int Speed = 2;
-    private const float MaxPosition = 255;
-    private const float PositionError = 0.02f; 
+    private const float Speed = 0.5f;
+    private const float MaxPosition = 100;
+    private const float PositionError = 0.5f;
     [SerializeField] private Text _idText;
     [SerializeField] private Transform _rotateArrow;
     [SerializeField] private Shadow _shadowPrefab;
     
     private RectTransform _rectTransform;
     private SpriteRenderer _spriteRenderer;
-    private float _tempWidth;
-    private float _tempHeight;
-    private float _tempWidthHalf;
-    private float _tempHeightHalf;
-    private int _parentWidth;
-    private int _parentHeight;
     private Vector2 _targetPos;
     private Vector2 _preTargetPos;
     private Vector2 _diffVector;
     private Shadow _shadow;
     private Dictionary<long, Vector2> _positionsBuffer;
     private int _deleteCounter;
-    
-    public Action<Player> OnDisconnect;
+    private float _size;
+
+    private List<Wall> WallMap;
     public float Interpolation { get; private set; }
     public int Id { get; private set; }
-    public Vector2 LocalPercentPosition { get; private set; }
-    public Vector2 LocalPercentVector { get; private set; }
-    public Vector3 PreLastServerPercentVector{ get; private set; }
-    public Vector3 ServerPercentVector{ get; private set; }
+    public Vector2 LocalPosition { get; private set; }
+    public Vector3 PreLastServerPosition{ get; private set; }
+    public Vector3 ServerPosition{ get; private set; }
     private void FixedUpdate()
     {
         MovePlayers();
         RotatePlayers();
     }
-    public void Initialize(int parentHalfWidth, int parentHalfHeight, int id, Vector3 startPosition)
+    public void Initialize( int id, Vector3 startPosition, List<Wall> wallMap)
     {
         _rectTransform = GetComponent<RectTransform>();
         _spriteRenderer = GetComponent<SpriteRenderer>();
-        _parentWidth = parentHalfWidth;
-        _parentHeight = parentHalfHeight;
-        GetStartSizes();
         Id = id;
         _idText.text = id.ToString();
         _shadow = Instantiate(_shadowPrefab, transform.parent);
         _shadow.SetId(Id);
-        float percentX = startPosition.x / MaxPosition;
-        float percentY = startPosition.y / MaxPosition;
-        LocalPercentVector = new Vector2(percentX,percentY);
-        ServerPercentVector = new Vector2(percentX,percentY);
-        _positionsBuffer = new Dictionary<long, Vector2> { { Game.TickLocal - 1, LocalPercentVector } ,{ Game.TickLocal, LocalPercentVector } };
-        _targetPos = GetNewPosition(LocalPercentVector);
+        Debug.Log("Create "+ Id);
+        float posX = startPosition.x;
+        float posY = startPosition.y;
+        LocalPosition = new Vector2(posX,posY);
+        ServerPosition = new Vector2(posX,posY);
+        _positionsBuffer = new Dictionary<long, Vector2> { { Game.TickLocal - 1, LocalPosition } ,{ Game.TickLocal, LocalPosition } };
+        _targetPos = LocalPosition;
         _preTargetPos = _targetPos;
         transform.localPosition = _targetPos;
+        WallMap = wallMap;
+        _size = transform.localScale.x;
     }
-    public void SetPositionFromServer(long tick,float percentX,float percentY)
+    public void SetPositionFromServer(float posX,float posY)
     {
         _deleteCounter = 0;
-        ServerPercentVector = new Vector3(percentX,percentY);
-        var newPosition = GetNewPosition( ServerPercentVector);
-        _shadow.SetPositionFromServer(newPosition);
+        ServerPosition = new Vector3(posX,posY);
+        _shadow.SetPositionFromServer(ServerPosition);
         if (Game.MyPlayerId == Id)
-        {  
-            if ( _positionsBuffer.ContainsKey(Game.LocalTickFromServer)){
-                PreLastServerPercentVector = _positionsBuffer[Game.LocalTickFromServer-1]; 
-                if ((_positionsBuffer[Game.LocalTickFromServer] - (Vector2)ServerPercentVector).magnitude > PositionError)
-                {
-                    Debug.Log("magnitude " + (_positionsBuffer[Game.LocalTickFromServer] - (Vector2)ServerPercentVector).magnitude);
-                    _positionsBuffer[Game.LocalTickFromServer] = ServerPercentVector;
-                    _positionsBuffer[Game.TickLocal] = ServerPercentVector;
-                    LocalPercentVector = ServerPercentVector;
-                    transform.localPosition = newPosition;
-                    Interpolation = 0; 
-                }
-            }
-            else
+            SetPositionMyPlayer();
+        else
+            SetPositionOtherPlayers();
+    }
+    private void SetPositionOtherPlayers()
+    {
+        if (_positionsBuffer.ContainsKey(Game.TickServer))
+            return;
+        _positionsBuffer.Add(Game.TickServer, ServerPosition);
+        _targetPos = ServerPosition;
+        Interpolation -= 1;
+        _diffVector = _targetPos - (Vector2)transform.localPosition;
+    }
+    private void SetPositionMyPlayer()
+    {
+        if (_positionsBuffer.ContainsKey(Game.LocalTickFromServer))
+        {
+            if (_positionsBuffer.ContainsKey(Game.LocalTickFromServer - 1))
+                PreLastServerPosition = _positionsBuffer[Game.LocalTickFromServer - 1];
+            if ((_positionsBuffer[Game.LocalTickFromServer] - (Vector2)ServerPosition).magnitude > PositionError)
             {
-                _positionsBuffer.Add(Game.LocalTickFromServer,ServerPercentVector);
-                PreLastServerPercentVector = _positionsBuffer[Game.LocalTickFromServer-1]; 
-                transform.localPosition = newPosition;
-                LocalPercentVector = ServerPercentVector;
-                _targetPos = newPosition;
-                Interpolation = 0;
+                Debug.Log("magnitude " + (_positionsBuffer[Game.LocalTickFromServer] - (Vector2)ServerPosition).magnitude);
+                _positionsBuffer[Game.LocalTickFromServer] = ServerPosition;
+                _positionsBuffer[Game.TickLocal] = ServerPosition;
+                SetToServerPosition();
             }
-        } 
+        }
         else
         {
-            if (!_positionsBuffer.ContainsKey(Game.TickServer))
-            {
-                _positionsBuffer.Add(Game.TickServer, new Vector2( percentX, percentY ));
-            } 
-            _diffVector = Vector2.zero;
-            if (_positionsBuffer.ContainsKey(Game.TickServer - 1))
-            {
-                _diffVector = GetNewPosition(_positionsBuffer[Game.TickServer]) - GetNewPosition(_positionsBuffer[Game.TickServer-1]);
-            }
-            Debug.Log($"_diffVector {_diffVector} _positionsBuffer[Game.TickServer] - _positionsBuffer[Game.TickServer-1] { _positionsBuffer[Game.TickServer] - _positionsBuffer[Game.TickServer-1]}"); 
-            _targetPos = newPosition; 
-            Interpolation = 0;
+            _positionsBuffer.Add(Game.LocalTickFromServer, ServerPosition);
+            if (_positionsBuffer.ContainsKey(Game.LocalTickFromServer - 1))
+                PreLastServerPosition = _positionsBuffer[Game.LocalTickFromServer - 1];
+            SetToServerPosition();
         }
     }
-    private Vector2 GetNewPosition(Vector2 percentPos)
+    private void SetToServerPosition()
     {
-        return new Vector2(
-            _tempWidth * percentPos.x - _tempWidthHalf,
-            _tempHeight * percentPos.y - _tempHeightHalf);
-    }
-    private Vector2 GetPercentPosition(Vector3 localPos)
-    {
-        return new Vector2(
-            (localPos.x + _tempWidthHalf)/_tempWidth,
-            (localPos.y + _tempHeightHalf)/ _tempHeight ); 
+        transform.localPosition = ServerPosition;
+        LocalPosition = ServerPosition;
+        _targetPos = ServerPosition;
+        Interpolation = 0;
     }
     private void MovePlayers()
     {
@@ -124,9 +108,11 @@ public class Player : MonoBehaviour
         {
             transform.localPosition += (Vector3)_diffVector / 5;
             Interpolation += 0.2f;
-            LocalPercentPosition = GetPercentPosition(transform.localPosition);
         }
-        Debug.Log(Interpolation);
+        else
+        {
+            transform.localPosition = _targetPos;
+        }
     }
     private void RotatePlayers()
     {
@@ -138,59 +124,87 @@ public class Player : MonoBehaviour
     {
         if(Id == 0) return;
         Interpolation = 0;
-        _diffVector = Vector2.zero;
         bool isBoosted = boost == 1;
-        LocalPercentVector = new Vector3(CalculatePos(LocalPercentVector.x, x, isBoosted),CalculatePos(LocalPercentVector.y, y, isBoosted));
+        LocalPosition = GetPosition(LocalPosition, x, y, isBoosted);
+        Debug.Log("after GetPosition");  
         _preTargetPos = _targetPos;
-        _targetPos = GetNewPosition(LocalPercentVector);
+        _targetPos = LocalPosition;
         if(!_positionsBuffer.ContainsKey(Game.TickLocal))
-            _positionsBuffer.Add(Game.TickLocal, LocalPercentVector);
+            _positionsBuffer.Add(Game.TickLocal, LocalPosition);
         if (_positionsBuffer.ContainsKey(Game.TickLocal) && _positionsBuffer.ContainsKey(Game.TickLocal - 1) && _positionsBuffer[Game.TickLocal - 1] != Vector2.zero)
-        {
-             
             _diffVector = _targetPos - _preTargetPos;
-        }
+        else
+            _diffVector = Vector2.zero;  
+        Debug.Log("_diffVector" + _diffVector); 
+        
     }
     public void MoveShadow(long tick)
     {
         if(!_positionsBuffer.ContainsKey(tick))
-            _shadow.SetPositionFromInput(GetNewPosition(_positionsBuffer[tick]));
+            _shadow.SetPositionFromInput(_positionsBuffer[tick]);
     }
-    private float CalculatePos(float pos, int direction, bool boosted)
+    private Vector2 GetPosition(Vector2 position, int x,int y, bool boosted)
     {
         int boostSpeed = 1;
         if (boosted) boostSpeed = 2;
-        float temp = pos * MaxPosition + direction * Speed * boostSpeed;
+        var calculatedPos = new Vector2(CalculatePos(position.x, x, boostSpeed), CalculatePos(position.y, y, boostSpeed));
+        var directionVector = new Vector2(x, y);
+        var checkedDirectionVector = CheckWalls(calculatedPos, directionVector, _size);
+        if( directionVector != checkedDirectionVector)
+            calculatedPos = new Vector2(CalculatePos(position.x, (int)checkedDirectionVector.x, boostSpeed), CalculatePos(position.y, (int)checkedDirectionVector.y, boostSpeed));
+        return calculatedPos;
+    }
+    private Vector2 CheckWalls(Vector2 pos, Vector2 direction, float width)
+    {
+        Debug.Log("CheckWalls");  
+        var top = pos + new Vector2(width / 2, width);
+        var right = pos + new Vector2(width, width / 2);
+        var bottom = pos + new Vector2(width / 2, 0);
+        var left = pos + new Vector2(0, width / 2);
+        var newDirection = direction; 
+        Debug.Log("direction" + direction); 
+        
+        foreach (var wall in WallMap)
+        {
+            if (wall.CheckIn(right))
+            {
+                if (direction.x > 0)
+                    newDirection = direction.y == 0 ? new Vector2(0, 1) : new Vector2(0, direction.y);
+                if(direction.x == 0) newDirection = new Vector2(-1, direction.y);
+            }else if (wall.CheckIn(left))
+            {
+                if (direction.x < 0)
+                    newDirection = direction.y == 0 ? new Vector2(0, -1) : new Vector2(0, direction.y);
+                if(direction.x == 0) newDirection = new Vector2(1, direction.y);
+            }else if (wall.CheckIn(bottom))
+            {
+                if (direction.y < 0)
+                    newDirection = direction.x == 0 ? new Vector2(1, 0) : new Vector2(direction.x, 0);
+                if(direction.y == 0) newDirection = new Vector2(direction.x, 1);
+            }else if (wall.CheckIn(top))
+            {
+                if (direction.y > 0)
+                    newDirection = direction.x == 0 ? new Vector2(-1, 0) : new Vector2(direction.x, 0);
+                if(direction.y == 0) newDirection = new Vector2(direction.x, -1);
+            }
+        }
+        Debug.Log("newDirection" + newDirection);
+        return newDirection;
+    }
+    private float CalculatePos(float pos, int direction, int boostSpeed)
+    {
+        float temp = pos + direction * Speed * boostSpeed;
         if (temp > MaxPosition)
             pos = MaxPosition;
         else if (temp < 0)
             pos = 0;
         else
             pos = temp;
-        return pos/MaxPosition;
+        return pos;
     }
     public void SetColor(Color color)
     {
         _spriteRenderer.color = color;
         _shadow.SetColor(color);
-    }
-    private void GetStartSizes()
-    {
-        Rect rect = _rectTransform.rect;
-        _tempWidth = _parentWidth - rect.width;
-        _tempHeight = _parentHeight - rect.height;
-        _tempWidthHalf = _tempWidth / 2;
-        _tempHeightHalf = _tempHeight / 2;
-    }
-    public void NoData()
-    {
-        _deleteCounter++;
-        if (_deleteCounter > 50)
-        {
-            OnDisconnect?.Invoke(this);
-            Destroy(gameObject);
-            Destroy(_shadow.gameObject);
-        }
-            
     }
 }
