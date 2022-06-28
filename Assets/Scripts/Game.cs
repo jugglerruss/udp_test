@@ -72,12 +72,13 @@ public class Game : MonoBehaviour
         _receiveBuffer = buffer.Skip(16).ToArray();
         _plane.SetDictDirections(_receiveBuffer);
     }
-    private void SetInput(int x,int y, int boost)
+    private void SetInput(int[] inputArray)
     {
         if (Stoped || MyPlayerId == 0 ) return;
         if (_isFirstTick) SetLocalTick();
-        _client.SendInput(TickLocal, x, y, boost);
-        _plane.SetInput(x,y,boost); 
+        //Debug.Log("fire "+inputArray[3]);
+        _client.SendInput(TickLocal, inputArray[0], inputArray[1], inputArray[2], inputArray[3]);
+        _plane.SetInput(inputArray[0], inputArray[1], inputArray[2]); 
     }
     private void SetLocalTick()
     {
@@ -90,7 +91,6 @@ public class Game : MonoBehaviour
         LocalTickFromServer = BitConverter.ToInt64(newBuffer, 0); 
         newBuffer = buffer.Skip(8).Take(8).ToArray();
         TickServer = BitConverter.ToInt64(newBuffer, 0);
-     //   Debug.Log("Game.LocalTickFromServer" + Game.LocalTickFromServer + " TickLocal " + TickLocal + " TickServer " + TickServer);  
         if (_isFirstTick)
             return;
         _isFirstTick = true;

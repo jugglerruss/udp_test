@@ -35,11 +35,11 @@ public class Client
     {
         _clientListener.Start();
     }
-    public void SendInput( long localTick, int x, int y, int boost)
+    public void SendInput( long localTick, int x, int y, int boost, int fire)
     {
         if (!Registered) return;
         byte[] bufferLocalTick = BitConverter.GetBytes(localTick);
-        byte[] buffer =  { (byte)boost, (byte)(x + 1), (byte)(y + 1) };
+        byte[] buffer =  { (byte)boost, (byte)(x + 1), (byte)(y + 1), (byte)fire };
         byte[] newBuffer = new byte[bufferLocalTick.Length + buffer.Length];
         bufferLocalTick.CopyTo(newBuffer, 0); 
         buffer.CopyTo(newBuffer, bufferLocalTick.Length); 

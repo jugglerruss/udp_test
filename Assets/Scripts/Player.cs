@@ -1,17 +1,24 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
+using Random = UnityEngine.Random;
 
 [RequireComponent(typeof(SpriteRenderer), typeof(RectTransform))]
 public class Player : MonoBehaviour
 {
-    private const float Speed = 0.5f;
     private const float MaxPosition = 100;
-    private const float PositionError = 0.5f;
+    private const int MaxAngle = 360;
+    [SerializeField] private float _speed;
+    [SerializeField] private int _speedRotation;
+    [SerializeField] private float _positionError;
     [SerializeField] private Text _idText;
     [SerializeField] private Transform _rotateArrow;
+    [SerializeField] private HealthLine _healthLine;
     [SerializeField] private Shadow _shadowPrefab;
+    [SerializeField] private Bullet _bulletPrefab;
     
     private RectTransform _rectTransform;
     private SpriteRenderer _spriteRenderer;
@@ -20,21 +27,26 @@ public class Player : MonoBehaviour
     private Vector2 _diffVector;
     private Shadow _shadow;
     private Dictionary<long, Vector2> _positionsBuffer;
-    private int _deleteCounter;
     private float _size;
+    private Color _color;
 
-    private List<Wall> WallMap;
+    private WallMap _wallMap;
     public float Interpolation { get; private set; }
     public int Id { get; private set; }
     public Vector2 LocalPosition { get; private set; }
     public Vector3 PreLastServerPosition{ get; private set; }
     public Vector3 ServerPosition{ get; private set; }
+    private int Angle{ get; set; }
+    private int ServerAngle{ get; set; }
+    private Bullet _bullet;
+    private List<Player> _playersList;
+    
     private void FixedUpdate()
     {
         MovePlayers();
         RotatePlayers();
     }
-    public void Initialize( int id, Vector3 startPosition, List<Wall> wallMap)
+    public void Initialize( int id, Vector3 startPosition, int angle, WallMap wallMap, List<Player> playersList, float health)
     {
         _rectTransform = GetComponent<RectTransform>();
         _spriteRenderer = GetComponent<SpriteRenderer>();
@@ -51,13 +63,18 @@ public class Player : MonoBehaviour
         _targetPos = LocalPosition;
         _preTargetPos = _targetPos;
         transform.localPosition = _targetPos;
-        WallMap = wallMap;
+        _wallMap = wallMap;
         _size = transform.localScale.x;
+        Angle = angle;
+        _bullet = Instantiate(_bulletPrefab, transform.position, Quaternion.identity, transform.parent);
+        _playersList = playersList;
+        _playersList.Remove(this);
+        _healthLine.SetHealth(health);
     }
-    public void SetPositionFromServer(float posX,float posY)
+    public void SetPositionFromServer(Vector2 position, int angle)
     {
-        _deleteCounter = 0;
-        ServerPosition = new Vector3(posX,posY);
+        ServerPosition = position;
+        ServerAngle = angle;
         _shadow.SetPositionFromServer(ServerPosition);
         if (Game.MyPlayerId == Id)
             SetPositionMyPlayer();
@@ -68,6 +85,7 @@ public class Player : MonoBehaviour
     {
         if (_positionsBuffer.ContainsKey(Game.TickServer))
             return;
+        Angle = ServerAngle;
         _positionsBuffer.Add(Game.TickServer, ServerPosition);
         _targetPos = ServerPosition;
         Interpolation -= 1;
@@ -79,13 +97,11 @@ public class Player : MonoBehaviour
         {
             if (_positionsBuffer.ContainsKey(Game.LocalTickFromServer - 1))
                 PreLastServerPosition = _positionsBuffer[Game.LocalTickFromServer - 1];
-            if ((_positionsBuffer[Game.LocalTickFromServer] - (Vector2)ServerPosition).magnitude > PositionError)
-            {
-                Debug.Log("magnitude " + (_positionsBuffer[Game.LocalTickFromServer] - (Vector2)ServerPosition).magnitude);
-                _positionsBuffer[Game.LocalTickFromServer] = ServerPosition;
-                _positionsBuffer[Game.TickLocal] = ServerPosition;
-                SetToServerPosition();
-            }
+            if (!((_positionsBuffer[Game.LocalTickFromServer] - (Vector2)ServerPosition).magnitude > _positionError))
+                return;
+            _positionsBuffer[Game.LocalTickFromServer] = ServerPosition;
+            _positionsBuffer[Game.TickLocal] = ServerPosition;
+            SetToServerPosition();
         }
         else
         {
@@ -100,6 +116,7 @@ public class Player : MonoBehaviour
         transform.localPosition = ServerPosition;
         LocalPosition = ServerPosition;
         _targetPos = ServerPosition;
+        Angle = ServerAngle;
         Interpolation = 0;
     }
     private void MovePlayers()
@@ -108,17 +125,13 @@ public class Player : MonoBehaviour
         {
             transform.localPosition += (Vector3)_diffVector / 5;
             Interpolation += 0.2f;
+            return;
         }
-        else
-        {
-            transform.localPosition = _targetPos;
-        }
+        transform.localPosition = _targetPos;
     }
     private void RotatePlayers()
     {
-        if( _diffVector.magnitude < 0.001f ) return; 
-        float angle = Vector2.SignedAngle(Vector2.right, _diffVector.normalized);
-        _rotateArrow.rotation = Quaternion.Slerp(_rotateArrow.rotation, Quaternion.AngleAxis(angle, new Vector3(0, 0, 1)), 0.02f);
+        _rotateArrow.rotation = Quaternion.Slerp(_rotateArrow.rotation, Quaternion.AngleAxis(Angle, new Vector3(0, 0, 1)), 0.2f);
     }
     public void MovePlayerFromInput(int x,int y, int boost)
     {
@@ -126,7 +139,6 @@ public class Player : MonoBehaviour
         Interpolation = 0;
         bool isBoosted = boost == 1;
         LocalPosition = GetPosition(LocalPosition, x, y, isBoosted);
-        Debug.Log("after GetPosition");  
         _preTargetPos = _targetPos;
         _targetPos = LocalPosition;
         if(!_positionsBuffer.ContainsKey(Game.TickLocal))
@@ -134,9 +146,7 @@ public class Player : MonoBehaviour
         if (_positionsBuffer.ContainsKey(Game.TickLocal) && _positionsBuffer.ContainsKey(Game.TickLocal - 1) && _positionsBuffer[Game.TickLocal - 1] != Vector2.zero)
             _diffVector = _targetPos - _preTargetPos;
         else
-            _diffVector = Vector2.zero;  
-        Debug.Log("_diffVector" + _diffVector); 
-        
+            _diffVector = Vector2.zero;
     }
     public void MoveShadow(long tick)
     {
@@ -147,64 +157,103 @@ public class Player : MonoBehaviour
     {
         int boostSpeed = 1;
         if (boosted) boostSpeed = 2;
-        var calculatedPos = new Vector2(CalculatePos(position.x, x, boostSpeed), CalculatePos(position.y, y, boostSpeed));
-        var directionVector = new Vector2(x, y);
-        var checkedDirectionVector = CheckWalls(calculatedPos, directionVector, _size);
-        if( directionVector != checkedDirectionVector)
-            calculatedPos = new Vector2(CalculatePos(position.x, (int)checkedDirectionVector.x, boostSpeed), CalculatePos(position.y, (int)checkedDirectionVector.y, boostSpeed));
+        var angle = Angle;
+        var calculatedPos = CalculatePos(ref angle,position, y, x, boostSpeed);
+        var directionVector = new MapCell(x, y);
+        calculatedPos = CheckWalls(ref angle, position, calculatedPos, directionVector, boostSpeed);
+        Angle = angle;
         return calculatedPos;
     }
-    private Vector2 CheckWalls(Vector2 pos, Vector2 direction, float width)
+    private Vector2 CheckWalls(ref int angle,Vector2 position, Vector2 calculatedPos, MapCell direction, int boostSpeed)
     {
-        Debug.Log("CheckWalls");  
-        var top = pos + new Vector2(width / 2, width);
-        var right = pos + new Vector2(width, width / 2);
-        var bottom = pos + new Vector2(width / 2, 0);
-        var left = pos + new Vector2(0, width / 2);
-        var newDirection = direction; 
-        Debug.Log("direction" + direction); 
-        
-        foreach (var wall in WallMap)
+        Vector2 maybePos;
+        int tempAngle;
+        if (IsTouchWallPosition(calculatedPos))
         {
-            if (wall.CheckIn(right))
+            for (int i = 1; i < 90; i++)
             {
-                if (direction.x > 0)
-                    newDirection = direction.y == 0 ? new Vector2(0, 1) : new Vector2(0, direction.y);
-                if(direction.x == 0) newDirection = new Vector2(-1, direction.y);
-            }else if (wall.CheckIn(left))
-            {
-                if (direction.x < 0)
-                    newDirection = direction.y == 0 ? new Vector2(0, -1) : new Vector2(0, direction.y);
-                if(direction.x == 0) newDirection = new Vector2(1, direction.y);
-            }else if (wall.CheckIn(bottom))
-            {
-                if (direction.y < 0)
-                    newDirection = direction.x == 0 ? new Vector2(1, 0) : new Vector2(direction.x, 0);
-                if(direction.y == 0) newDirection = new Vector2(direction.x, 1);
-            }else if (wall.CheckIn(top))
-            {
-                if (direction.y > 0)
-                    newDirection = direction.x == 0 ? new Vector2(-1, 0) : new Vector2(direction.x, 0);
-                if(direction.y == 0) newDirection = new Vector2(direction.x, -1);
+                tempAngle = angle;
+                if(GetWallPosition(i) != position)
+                {
+                    angle = tempAngle;
+                    return maybePos;
+                }
+                tempAngle = angle;
+                if(GetWallPosition(-i) != position)
+                {
+                    angle = tempAngle;
+                    return maybePos;
+                }
             }
+            Debug.Log("Cant find angle");
         }
-        Debug.Log("newDirection" + newDirection);
-        return newDirection;
+        return calculatedPos;
+        
+        Vector2 GetWallPosition( int scaleRotate)
+        {
+            maybePos = CalculatePos(ref tempAngle,position, direction.Y, scaleRotate, boostSpeed,2);
+            return !IsTouchWallPosition(maybePos) ? maybePos : position;
+        }
+        bool IsTouchWallPosition( Vector2 pos)
+        {
+            for (int i = -3; i < 3; i++)
+            {
+                var dir = pos + DirectionFromAngle(Angle + 45 * i) * _size / 2;
+                if (_wallMap.IsWallPosition(dir.x,dir.y)) return true;
+            }
+            return false;
+        }
     }
-    private float CalculatePos(float pos, int direction, int boostSpeed)
+    private Vector2 CalculatePos(ref int angle,Vector2 pos, int forward, int rotate, int boostSpeed, int rotationSpeed = 5)
     {
-        float temp = pos + direction * Speed * boostSpeed;
-        if (temp > MaxPosition)
-            pos = MaxPosition;
-        else if (temp < 0)
-            pos = 0;
-        else
-            pos = temp;
+        angle -= rotate * rotationSpeed;
+        if (angle > MaxAngle) angle -= MaxAngle;
+        if (angle < 0) angle += MaxAngle;
+        Vector2 tempPos = pos + forward * _speed * boostSpeed * DirectionFromAngle(angle);
+        pos = tempPos;
+        if (tempPos.x > MaxPosition)
+            pos.x = MaxPosition;
+        else if (tempPos.x < 0)
+            pos.x = 0;
+        
+        if (tempPos.y > MaxPosition)
+            pos.y = MaxPosition;
+        else if (tempPos.y < 0)
+            pos.y = 0;
         return pos;
     }
-    public void SetColor(Color color)
+    public void Fire(Vector2 bulletVector, bool dmged, float health)
     {
+        if (bulletVector != new Vector2(105, 105))
+        {
+            var pos = ServerPosition;
+            _bullet.Initialize(pos,  bulletVector);
+        }
+        if (dmged)
+        {
+            _healthLine.SetHealth(health);
+            if(health == 0) _color = Color.clear;
+            StartCoroutine(Blink());
+        }
+    }
+    public void SetColor(Color color, bool init = false)
+    {
+        if (init) _color = color;
         _spriteRenderer.color = color;
         _shadow.SetColor(color);
+    }
+    public bool IsTouching(Vector2 pos)
+    {
+        return ((Vector2)ServerPosition - pos).magnitude <= _size / 2;
+    }
+    private Vector2 DirectionFromAngle(float angleInDegrees)
+    {
+        return new Vector2(Mathf.Cos(angleInDegrees * Mathf.Deg2Rad), Mathf.Sin(angleInDegrees * Mathf.Deg2Rad)).normalized;
+    }
+    private IEnumerator Blink()
+    {
+        SetColor(Color.yellow);
+        yield return new WaitForSeconds(0.2f);
+        SetColor(_color);
     }
 }
